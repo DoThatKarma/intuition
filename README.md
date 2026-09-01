@@ -1,18 +1,22 @@
 # Intuition
 
-A quiet inner voice for Agent Zero. A small second brain that watches the agent work and whispers best-practice nudges when it sees something dumb or obviously forgotten — **without ever stopping the flow**.
+A quiet inner voice for Agent Zero. A small second brain that watches the agent work and whispers best-practice hints when it sees something dumb or obviously forgotten — **without ever stopping the flow**.
 
 Inspired by the `_infection_check` plugin (same collection/analysis skeleton), but with the opposite contract: where Infection Check gates and can terminate, Intuition only observes and suggests.
 
 ## Why You Need It
 
-Every long agent session drifts. With a big context in play, capable models still forget the obvious: they re-run something that just succeeded, edit a file nobody has read, declare victory without testing, or let a delegated sub-task hang forever while they wait politely. Not because the model is bad — because *watching yourself* while *doing the work* is exactly what working memory is worst at.
+When you have long interactions with LLMs, they do great work most of the time — but from time to time they just do unexpected things. Even though your prompts are perfect and the model understood everything an hour ago, it still misses things when working on large, complex tasks.
 
-Intuition is the senior developer looking over the agent's shoulder. It costs almost nothing (a tiny utility-model call per watched step, in the background), it never interrupts or blocks anything, and it only speaks up on the rare clearly-dumb moment. Think of it as a smaller brain quietly watching the main brain — and muttering "wait, don't..." when it matters.
+Intuition solves this in a subtle way: it watches the datastream and sends a 💡 into the agent's chat — not as a prompt, but as an Agent Zero warning — which the agent can choose to listen to or simply not care about. (Like real people with their intuition.)
+
+You can also turn it all the way up to MAX and use it more like a **Mentor**: if you don't want to set up a complex multi-agent workflow for a task but still want feedback, you get a second opinion watching over your agent's shoulder — instead of sending everything to a separate reviewer.
+
+And it costs almost nothing: a tiny utility-model call per watched step, in the background, and it never blocks or interrupts anything.
 
 ## What It Does
 
-While the agent streams its reasoning and response, a configurable "inner voice" model analyzes the current step in the background. If it spots something clearly dumb — editing a file nobody read, claiming done without verifying, redoing work that already succeeded, a destructive action with no backup, ignoring an explicit user instruction — it nudges. Otherwise it stays silent (~95% of the time).
+While the agent streams its reasoning and response, a configurable "inner voice" model analyzes the current step in the background. If it spots something clearly dumb — editing a file nobody read, claiming done without verifying, redoing work that already succeeded, a destructive action with no backup, ignoring an explicit user instruction — or if it quietly forgets your original prompt while deep in a long task (the warning can nudge it back on track) — it speaks up. Otherwise it stays silent (~95% of the time).
 
 Hints are delivered as a small log item in the chat and/or as a message injected into the agent's history, so the main model actually reads the tip on its next step. Nothing is ever blocked, nothing is ever terminated.
 
@@ -20,7 +24,7 @@ Hints are delivered as a small log item in the chat and/or as a message injected
 
 1. **Collection** — During streaming, the plugin collects the agent's reasoning and response text via `reasoning_stream_chunk` and `response_stream_chunk` extensions.
 2. **Analysis** — A background task sends the current step (plus recent history for context) to the configured model with the customizable inner-voice prompt. Sensitivity level and enabled focus areas are appended automatically.
-3. **Delivery** — If the verdict is a nudge, it is delivered non-blockingly:
+3. **Delivery** — If the verdict is a hint, it is delivered non-blockingly:
    - before the next tool executes (if the analysis already finished, or within `max_wait_ms`),
    - or late, at the start of the next iteration, before the next model call.
 4. **Silence** — `<ok/>` verdicts, parse failures, errors, and duplicate hints all result in silence. The flow is never disturbed.
@@ -46,12 +50,12 @@ Hints are delivered as a small log item in the chat and/or as a message injected
 | **medium** (default) | Obvious issues (≥ 75% confident) |
 | **high** | Any notable improvement (≥ 60% confident) |
 
-Focus areas let you choose what the inner voice watches: `best_practices`, `efficiency`, `safer_actions`, `clear_communication`. Unticked areas are not nudged about. If all areas are unticked, no filter is applied and everything is watched.
+Focus areas let you choose what the inner voice watches: `best_practices`, `efficiency`, `safer_actions`, `clear_communication`. Unticked areas are not watched. If all areas are unticked, no filter is applied and everything is watched.
 
 ## Pacing
 
 - **Focus calls** — how many of the agent's work steps (iterations) the inner voice analyzes per request (default 8, `0` = unlimited). Each watched step costs one small background model call (utility model by default), so this caps watching costs on long tasks. Once the budget is spent, the voice stays quiet for the rest of that request — it never blocks anything — and the budget resets automatically on your next message.
-- **Cooldown** — minimum iterations between nudges (default 3, 0 = off). Prevents nagging.
+- **Cooldown** — minimum iterations between hints (default 3, 0 = off). Prevents nagging.
 - **Dedupe** — an identical hint is never repeated.
 - **Hang watchdog** — if a tool call (especially a delegated sub-agent) has produced no result for N minutes (default 10, `0` = off), Intuition actively checks whether it looks stuck and, if so, sends a proper warning to the agent *and* a desktop notification to you — instead of everyone waiting politely forever.
 
@@ -63,7 +67,7 @@ Focus areas let you choose what the inner voice watches: `best_practices`, `effi
 | `user` | Hint is shown in the chat log only (never reaches the model) |
 | `both` (default) | History injection + visible log item (warning styling) |
 
-With `user` or `both`, every nudge also raises a desktop notification (**Intuition - Alert!** — *"The intuition noticed strange behaviour.."* with the hint as the detail), so you see what the inner voice reacted to even when you are not watching the chat. The hang watchdog warning additionally reaches the agent's history in all modes.
+With `user` or `both`, every hint also raises a desktop notification (**Intuition - Alert!** — *"The intuition noticed strange behaviour.."* with the hint as the detail), so you see what the inner voice reacted to even when you are not watching the chat. The hang watchdog warning additionally reaches the agent's history in all modes.
 
 ## Configuration
 
@@ -74,7 +78,7 @@ With `user` or `both`, every nudge also raises a desktop notification (**Intuiti
 | Sensitivity | `medium` | `low`, `medium`, or `high` |
 | Focus areas | *(all four)* | What the inner voice watches |
 | Focus calls | `8` | Work steps watched per request, then quiet until your next message (0 = unlimited) |
-| Cooldown | `3` | Minimum iterations between nudges (0 = off) |
+| Cooldown | `3` | Minimum iterations between hints (0 = off) |
 | Hang watchdog | `10` | Minutes a tool call may stall before Intuition checks whether it looks stuck (0 = off) |
 | Delivery | `both` | `agent`, `user`, or `both` |
 | Max wait (ms) | `0` | Optional max pause before tool execution; 0 = never wait |
@@ -121,7 +125,7 @@ With `user` or `both`, every nudge also raises a desktop notification (**Intuiti
 - **Name**: `intuition`
 - **Title**: `Intuition`
 - **Version**: `0.3.0`
-- **Description**: A quiet inner voice that watches the agent work and whispers best-practice nudges when it sees something dumb or obviously forgotten — never blocks the flow.
+- **Description**: A quiet inner voice that watches the agent work and whispers best-practice hints when it sees something dumb or obviously forgotten — never blocks the flow.
 
 ## Assets
 
@@ -129,5 +133,5 @@ With `user` or `both`, every nudge also raises a desktop notification (**Intuiti
 
 ## Credits
 
-- **Intuition** was created by **DoThat from Nexum AI - [nxm.nu](https://nxm.nu)** — with Agent Zero itself as the dev team (the plugin was built, reviewed and fixed by agent pairs, which felt fitting).
-- **Architecture inspiration**: the built-in [`_infection_check`](https://github.com/agent0ai/agent-zero/tree/main/plugins/_infection_check) plugin by the Agent Zero team. Intuition reuses its collection/analysis/gating skeleton with the opposite contract — where Infection Check protects the *user* by blocking, Intuition helps the *agent* by nudging. Thank you for the excellent blueprint.
+- **Intuition** was created by **DoThat from Nexum AI - [nxm.nu](https://nxm.nu)** — with Agent Zero itself as the dev team and yes, it was built *with* Intuition: Agent Zero as the senior developer, and DoThat's Intuition 💡 quietly watching over the whole build.
+- **Architecture inspiration**: the built-in [`_infection_check`](https://github.com/agent0ai/agent-zero/tree/main/plugins/_infection_check) plugin by the Agent Zero team. Intuition reuses its collection/analysis/gating skeleton with the opposite contract — where Infection Check protects the *user* by blocking, Intuition helps the *agent* with a quiet hint. Thank you for excellent work. We love it!
