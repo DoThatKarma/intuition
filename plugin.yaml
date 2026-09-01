@@ -1,0 +1,8 @@
+name: intuition
+title: Intuition
+description: A quiet inner voice that watches the agent work and whispers best-practice nudges when it sees something dumb or obviously forgotten — never blocks the flow.
+version: 0.3.0
+settings_sections:
+  - agent
+per_project_config: true
+per_agent_config: true

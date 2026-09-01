@@ -1,0 +1,167 @@
+<html>
+<head><title>Intuition</title></head>
+<body>
+<div x-data>
+  <template x-if="config">
+    <div>
+      <div class="section-title">Intuition</div>
+      <div class="section-description">
+        A quiet inner voice that watches the agent work and whispers best-practice nudges
+        when it sees something dumb or obviously forgotten. It never blocks the agent —
+        hints surface as a 💡 whisper into the agent's context and/or the chat log, while
+        the agent keeps working. It is deliberately not very sensitive by default: it stays
+        silent most of the time and only speaks when it is actually worth it.
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Mode</div>
+          <div class="field-description">
+            What the inner voice reads.
+            <b>Thoughts</b>: analyze the agent's reasoning and planned tool call as it streams (faster — runs alongside generation).<br>
+            <b>Complete</b>: analyze the full response including tool arguments (more thorough, slightly slower).
+          </div>
+        </div>
+        <div class="field-control">
+          <select x-model="config.mode">
+            <option value="thoughts">Thoughts (faster)</option>
+            <option value="complete">Complete (more thorough)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Model</div>
+          <div class="field-description">Which model runs the inner voice. Utility is cheap and fast; main is smarter but burns your primary tokens on every check.</div>
+        </div>
+        <div class="field-control">
+          <select x-model="config.model">
+            <option value="utility">Utility model</option>
+            <option value="main">Main model</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Sensitivity (how chatty the inner voice is)</div>
+          <div class="field-description">
+            <b>Low</b>: only blatant mistakes (confidence ≥ 0.9).<br>
+            <b>Medium</b>: obvious issues (confidence ≥ 0.75) — the deliberate default, so the voice stays quiet most of the time.<br>
+            <b>High</b>: any notable improvement (confidence ≥ 0.6).
+          </div>
+        </div>
+        <div class="field-control">
+          <select x-model="config.sensitivity">
+            <option value="low">Low (only blatant mistakes)</option>
+            <option value="medium">Medium (obvious issues)</option>
+            <option value="high">High (any notable improvement)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Focus Areas</div>
+          <div class="field-description">What the inner voice pays attention to. Unticked areas are ignored entirely. Untick everything = watch everything (no filter).</div>
+        </div>
+        <div class="field-control" style="width:100%;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;">
+            <label style="display:flex;align-items:center;gap:6px;white-space:nowrap;"><input type="checkbox" value="best_practices" x-model="config.focus_areas" /> Best practices</label>
+            <label style="display:flex;align-items:center;gap:6px;white-space:nowrap;"><input type="checkbox" value="efficiency" x-model="config.focus_areas" /> Efficiency</label>
+            <label style="display:flex;align-items:center;gap:6px;white-space:nowrap;"><input type="checkbox" value="safer_actions" x-model="config.focus_areas" /> Safer actions</label>
+            <label style="display:flex;align-items:center;gap:6px;white-space:nowrap;"><input type="checkbox" value="clear_communication" x-model="config.focus_areas" /> Clear communication</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Focus Calls</div>
+          <div class="field-description">How many of the agent's work steps the inner voice watches per request (one of your messages = one request). Each watched step costs one small background model call, so this caps watching costs on long tasks. When the budget runs out, the voice just goes quiet until your next message — it never blocks anything. 0 = watch everything.</div>
+        </div>
+        <div class="field-control">
+          <input type="number" min="0" max="50"
+            x-model.number="config.focus_calls" />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Cooldown</div>
+          <div class="field-description">Minimum iterations between nudges, so the voice doesn't nag. 0 = no cooldown. Example: 3 means at most one nudge every 3 iterations.</div>
+        </div>
+        <div class="field-control">
+          <input type="number" min="0" max="20"
+            x-model.number="config.cooldown" />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Hang watchdog</div>
+          <div class="field-description">Minutes a tool call may run without returning before Intuition checks whether it looks stuck (e.g. a subordinate that never delivers) and sends a proper warning to the agent and user. 0 = disabled.</div>
+        </div>
+        <div class="field-control">
+          <input type="number" min="0" max="120"
+            x-model.number="config.hang_timeout" />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Delivery</div>
+          <div class="field-description">Who hears the hint.
+            <b>Agent</b>: whisper into the agent's context — the model sees it next iteration; it also appears in the chat log as a small info item.<br>
+            <b>User</b>: show it in the chat log only — the model never sees it.<br>
+            <b>Both</b>: whisper into the agent's context and show it in the chat log (logged with warning styling).
+          </div>
+        </div>
+        <div class="field-control">
+          <select x-model="config.delivery">
+            <option value="agent">Agent (whisper to the model)</option>
+            <option value="user">User (chat log only)</option>
+            <option value="both">Both</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Max Wait Before Tool Execution</div>
+          <div class="field-description">Optional maximum pause (ms) before a tool executes while the inner voice finishes its check. 0 = never wait (recommended) — the hint is then delivered later, before the model's next step. The flow is never blocked either way.</div>
+        </div>
+        <div class="field-control">
+          <input type="number" min="0" max="5000" step="100"
+            x-model.number="config.max_wait_ms" />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">History Size</div>
+          <div class="field-description">Recent conversation messages the inner voice sees as context for each check. 0 = include the entire history.</div>
+        </div>
+        <div class="field-control">
+          <input type="number" min="0" max="50"
+            x-model.number="config.history_size" />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Inner Voice Prompt</div>
+          <div class="field-description">System prompt for the watcher model — persona and verdict format. Sensitivity level and focus areas are appended automatically. Advanced: edit only if you know what you are doing.</div>
+        </div>
+        <div class="field-control" style="width:100%;">
+          <textarea rows="14" style="width:100%;font-family:monospace;font-size:0.85em;"
+            x-model="config.prompt"></textarea>
+        </div>
+      </div>
+
+    </div>
+  </template>
+</div>
+</body>
+</html>
