@@ -14,7 +14,7 @@ def _load_helper():
     mod_name = "usr.plugins.intuition.helpers.intuition"
     try:
         helper = importlib.import_module(mod_name)
-        if getattr(helper, "RUNTIME_MARKER", None) != "v10-alert":
+        if getattr(helper, "RUNTIME_MARKER", None) != "v12-reliability":
             raise AttributeError("stale helper cache")
         return helper
     except (ImportError, AttributeError):
@@ -34,6 +34,25 @@ except Exception:  # noqa: BLE001 - this plugin must never break the framework
     _helper = None
 
 
+def _helper_ok() -> bool:
+    """v0.3.2 (M4): lazy re-import for the helper.
+
+    A one-off import failure at module load (partial plugin write during
+    boot, transient fs error) used to disable this extension until process
+    restart. Retry the load once per call instead - the marker check inside
+    _load_helper still heals stale caches as before.
+    """
+    global _helper
+    if _helper is not None:
+        return True
+    try:
+        _helper = _load_helper()
+    except Exception:  # noqa: BLE001 - never break the framework
+        return False
+    return True
+
+
+
 class IntuitionDeliver(Extension):
     """Non-blocking delivery point before tool execution.
 
@@ -44,7 +63,7 @@ class IntuitionDeliver(Extension):
     """
 
     async def execute(self, tool_name="", tool_args={}, **kwargs):
-        if not self.agent or _helper is None:
+        if not self.agent or not _helper_ok():
             return
         try:
             _helper.start_tool_watchdog(

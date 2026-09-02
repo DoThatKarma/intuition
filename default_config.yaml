@@ -4,7 +4,9 @@ sensitivity: medium
 focus_calls: 8
 cooldown: 3
 hang_timeout: 10
+analysis_timeout: 90
 delivery: both
+real_nudge: false
 max_wait_ms: 0
 history_size: 10
 focus_areas:

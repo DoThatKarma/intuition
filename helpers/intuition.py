@@ -14,11 +14,14 @@ DATA_KEY_WATCHER = f"_plugin.{PLUGIN_NAME}.watcher"
 DATA_KEY_PENDING = f"_plugin.{PLUGIN_NAME}.pending_watchers"
 DATA_KEY_BUDGET = f"_plugin.{PLUGIN_NAME}.budget_used"
 DATA_KEY_LAST_NUDGE = f"_plugin.{PLUGIN_NAME}.last_nudge_iter"
+DATA_KEY_LAST_REAL_NUDGE = f"_plugin.{PLUGIN_NAME}.last_real_nudge_ts"
 DATA_KEY_LAST_HINT = f"_plugin.{PLUGIN_NAME}.last_hint"
 DATA_KEY_RECENT_HINTS = f"_plugin.{PLUGIN_NAME}.recent_hints"
 DATA_KEY_REQUEST_SIG = f"_plugin.{PLUGIN_NAME}.request_sig"
 DATA_KEY_REQUEST_OPEN = f"_plugin.{PLUGIN_NAME}.request_open"
 DATA_KEY_TOOLWATCH = f"_plugin.{PLUGIN_NAME}.tool_watch_task"
+DATA_KEY_ITER_SEEN = f"_plugin.{PLUGIN_NAME}.iter_seen"
+DATA_KEY_ERR_STREAK = f"_plugin.{PLUGIN_NAME}.err_streak"
 
 HINT_HEADING = "💡 Intuition"
 HINT_PREFIX = "💡 Intuition:"
@@ -26,7 +29,7 @@ HINT_PREFIX = "💡 Intuition:"
 # Bumped whenever helper code changes: extensions check this marker so a
 # stale cached module in a long-running process is detected, purged and
 # re-imported from disk (self-healing live updates).
-RUNTIME_MARKER = "v10-alert"
+RUNTIME_MARKER = "v12-reliability"
 
 _RE_OK = re.compile(r"<ok\s*/>")
 _RE_NUDGE = re.compile(r"<nudge>(.*?)</nudge>", re.DOTALL)
@@ -132,6 +135,15 @@ def _harvest(agent: "Agent", old: "IntuitionWatcher | None"):
             pending = []
         if old not in pending:
             pending.append(old)
+        # v0.3.2 (m3): cap parked watchers - a persistently wedged provider
+        # would otherwise grow this list for the whole request.
+        while len(pending) > 8:
+            dropped = pending.pop(0)
+            try:
+                if dropped is not None:
+                    dropped.cancel_stale()
+            except Exception:
+                pass
         agent.set_data(DATA_KEY_PENDING, pending)
     except Exception:
         pass
@@ -197,13 +209,20 @@ async def _tool_watch_loop(
             f"## Recent conversation\n{hist_text}"
         )
         watcher = IntuitionWatcher(config=get_config(agent), iteration=-999)
+        watcher._no_anchor = True  # v0.3.2 (M5): keep -999 out of the anchor
         msgs = [
             SystemMessage(content=HANG_SYSTEM_PROMPT),
             HumanMessage(content=payload),
         ]
         try:
             model = watcher._get_model(agent)
-            response, _ = await model.unified_call(messages=msgs)
+            # v0.3.2 (M3): same deadline as regular analyses.
+            call = model.unified_call(messages=msgs)
+            if watcher.analysis_timeout > 0:
+                async with asyncio.timeout(watcher.analysis_timeout):
+                    response, _ = await call
+            else:
+                response, _ = await call
         except Exception:
             return
         action, hint = parse_result(response)
@@ -230,6 +249,14 @@ def reset_request_state(agent: "Agent"):
         cancel_all(agent)
         stop_tool_watchdog(agent)
         agent.set_data(DATA_KEY_WATCHER, None)
+        # v0.3.2 (M2): the framework rebuilt LoopData, so iteration restarts
+        # at 1 while the cooldown anchor still holds the previous epoch's
+        # high value - a late hint could then block every check with a
+        # permanently negative delta. Rebase the anchor into the new epoch.
+        last_nudge = agent.get_data(DATA_KEY_LAST_NUDGE)
+        if last_nudge is not None:
+            prior_seen = int(agent.get_data(DATA_KEY_ITER_SEEN) or 0)
+            agent.set_data(DATA_KEY_LAST_NUDGE, int(last_nudge) - prior_seen)
         agent.set_data(DATA_KEY_REQUEST_OPEN, True)
         return
     cancel_all(agent)
@@ -237,6 +264,8 @@ def reset_request_state(agent: "Agent"):
     agent.set_data(DATA_KEY_WATCHER, None)
     agent.set_data(DATA_KEY_BUDGET, 0)
     agent.set_data(DATA_KEY_LAST_NUDGE, None)
+    agent.set_data(DATA_KEY_ITER_SEEN, 0)
+    agent.set_data(DATA_KEY_ERR_STREAK, 0)
     agent.set_data(DATA_KEY_LAST_HINT, "")
     agent.set_data(DATA_KEY_RECENT_HINTS, [])
     agent.set_data(DATA_KEY_REQUEST_SIG, sig)
@@ -270,6 +299,10 @@ def _request_signature(agent: "Agent") -> str:
 def request_finished(agent: "Agent"):
     """Request is done (monologue_end): clean tasks and close the request."""
     cancel_all(agent)
+    # v0.3.2 (M5): a request ending while a tool is still outstanding (user
+    # stop, kill, exception mid-tool) must not leave the hang watchdog armed
+    # - it could otherwise fire a stale warning many minutes later.
+    stop_tool_watchdog(agent)
     try:
         agent.set_data(DATA_KEY_REQUEST_OPEN, False)
     except Exception:
@@ -302,6 +335,15 @@ def get_watcher(agent: "Agent") -> "IntuitionWatcher":
     """Get or create the watcher for the current iteration."""
     loop = getattr(agent, "loop_data", None)
     iteration = loop.iteration if loop else -1
+    # v0.3.2 (M2): track the highest iteration seen this request so the
+    # retry rebase in reset_request_state can translate the old anchor.
+    if iteration >= 0:
+        try:
+            seen = int(agent.get_data(DATA_KEY_ITER_SEEN) or 0)
+            if iteration > seen:
+                agent.set_data(DATA_KEY_ITER_SEEN, iteration)
+        except Exception:
+            pass
     watcher: "IntuitionWatcher | None" = agent.get_data(DATA_KEY_WATCHER)
     if watcher is None or watcher.iteration != iteration:
         _harvest(agent, watcher)  # deliver or park the previous watcher's work
@@ -349,6 +391,35 @@ def _norm_hint(text: str) -> str:
     return re.sub(r"\s+", " ", lowered).strip()
 
 
+def _note_analysis_error(agent: "Agent", exc: Exception):
+    """v0.3.2 (M1): failed analyses must be cheap and observable.
+
+    Refunds the watch-budget slot the analysis consumed and logs the first
+    error of a streak (then every 10th) so a provider outage becomes visible
+    without turning quiet failure into log spam.
+    """
+    try:
+        used = int(agent.get_data(DATA_KEY_BUDGET) or 0)
+        if used > 0:
+            agent.set_data(DATA_KEY_BUDGET, used - 1)
+    except Exception:
+        pass
+    try:
+        streak = int(agent.get_data(DATA_KEY_ERR_STREAK) or 0) + 1
+        agent.set_data(DATA_KEY_ERR_STREAK, streak)
+        if streak == 1 or streak % 10 == 0:
+            agent.context.log.log(
+                type="info",
+                heading=HINT_HEADING,
+                content=(
+                    f"(watch) analysis failed ({type(exc).__name__}) - watch "
+                    f"slot refunded; consecutive failures: {streak}"
+                ),
+            )
+    except Exception:
+        pass
+
+
 class IntuitionWatcher:
     """Collects streams, analyzes in background, delivers nudges. Never blocks."""
 
@@ -364,13 +435,23 @@ class IntuitionWatcher:
         # Cached at construction: the delivery extension and _deliver must
         # not re-read config from disk on every tool call / nudge.
         self.max_wait_ms: int = int(config.get("max_wait_ms", 0) or 0)
+        # v0.3.2 (M3): total deadline for one analysis call - a wedged
+        # provider connection must free the slot, not park the watcher.
+        # 0 disables the deadline.
+        self.analysis_timeout: float = float(config.get("analysis_timeout", 90) or 0)
         self.delivery: str = str(config.get("delivery", "both") or "both")
+        # v0.3.1: optional real Agent Zero Nudge (interrupting framework
+        # mechanism) on top of the whisper. Off by default.
+        self.real_nudge: bool = bool(config.get("real_nudge", False))
         self.iteration = iteration
 
         self.reasoning_log = ""
         self.response_log = ""
         self._task: asyncio.Task | None = None
         self._delivered = False
+        # v0.3.2 (M5): watchdog deliveries run outside the iteration
+        # economy and must not write their -999 into the cooldown anchor.
+        self._no_anchor = False
 
     # -- collection ----------------------------------------------------------
 
@@ -481,7 +562,8 @@ class IntuitionWatcher:
                 recent.append(hint)
                 agent.set_data(DATA_KEY_RECENT_HINTS, recent[-5:])
             agent.set_data(DATA_KEY_LAST_HINT, hint)
-            agent.set_data(DATA_KEY_LAST_NUDGE, self.iteration)
+            if not self._no_anchor:
+                agent.set_data(DATA_KEY_LAST_NUDGE, self.iteration)
             if duplicate:
                 return
         except Exception:
@@ -531,6 +613,32 @@ class IntuitionWatcher:
                     detail=hint,
                     display_time=5,
                 )
+            except Exception:
+                pass
+
+        # v0.3.1: optional real Agent Zero Nudge on top of the whisper.
+        # context.nudge() kills the running agent task and injects
+        # fw.msg_nudge.md ("Nudged - continue") as a user message, so it must
+        # run only after the hint is fully delivered, only when the agent
+        # actually received it (agent/both), never for suppressed duplicates,
+        # and at most once per 5 minutes to avoid nudge loops.
+        if getattr(self, "real_nudge", False) and delivery in ("agent", "both"):
+            try:
+                import time as _time
+
+                now = _time.time()
+                last = agent.get_data(DATA_KEY_LAST_REAL_NUDGE)
+                if not isinstance(last, (int, float)) or now - float(last) >= 300:
+                    agent.set_data(DATA_KEY_LAST_REAL_NUDGE, now)
+                    ctx = agent.context
+
+                    async def _fire_real_nudge() -> None:
+                        try:
+                            ctx.nudge()
+                        except Exception:
+                            pass
+
+                    asyncio.create_task(_fire_real_nudge())
             except Exception:
                 pass
 
@@ -609,8 +717,25 @@ class IntuitionWatcher:
             ]
 
             model = self._get_model(agent)
-            response, _ = await model.unified_call(messages=msgs)
+            # v0.3.2 (M3): hard deadline around the provider call.
+            call = model.unified_call(messages=msgs)
+            if self.analysis_timeout > 0:
+                async with asyncio.timeout(self.analysis_timeout):
+                    response, _ = await call
+            else:
+                response, _ = await call
             action, hint = parse_result(response)
+            try:
+                agent.set_data(DATA_KEY_ERR_STREAK, 0)
+            except Exception:
+                pass
             return action, hint, response
-        except Exception:
-            return "ok", "", ""  # silence on any failure — never disturb the flow
+        except asyncio.CancelledError:
+            # v0.3.2 (M1): cancellation is cleanup/user-stop - it must not
+            # be refunded, converted or swallowed.
+            raise
+        except Exception as exc:
+            # v0.3.2 (M1): a failed analysis must not consume a budget slot
+            # and must be observable. "error" behaves like "ok" everywhere.
+            _note_analysis_error(agent, exc)
+            return "error", "", ""

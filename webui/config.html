@@ -100,12 +100,33 @@
 
       <div class="field">
         <div class="field-label">
+          <div class="field-title">Real Agent Zero Nudge</div>
+          <div class="field-description">On top of the usual hint, also send a real Agent Zero Nudge to the agent. This interrupts the current run (same mechanism as the /nudge command) and tells the agent to continue with the hint in mind. <b>Off by default</b> — it actively interrupts the agent, so only turn this on for Mentor-style setups. At most once per 5 minutes.</div>
+        </div>
+        <div class="field-control">
+          <input type="checkbox" x-model="config.real_nudge" />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
           <div class="field-title">Hang watchdog</div>
           <div class="field-description">Minutes a tool call may run without returning before Intuition checks whether it looks stuck (e.g. a subordinate that never delivers) and sends a proper warning to the agent and user. 0 = disabled.</div>
         </div>
         <div class="field-control">
           <input type="number" min="0" max="120"
             x-model.number="config.hang_timeout" />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">Analysis timeout</div>
+          <div class="field-description">Max seconds for one background analysis before it is cancelled and its watch slot refunded. Protects long sessions from a hung provider connection silently eating the watch budget. Default 90; 0 = no timeout.</div>
+        </div>
+        <div class="field-control">
+          <input type="number" min="0" max="600"
+            x-model.number="config.analysis_timeout" />
         </div>
       </div>
 

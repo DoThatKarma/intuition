@@ -58,6 +58,8 @@ Focus areas let you choose what the inner voice watches: `best_practices`, `effi
 - **Cooldown** — minimum iterations between hints (default 3, 0 = off). Prevents nagging.
 - **Dedupe** — an identical hint is never repeated.
 - **Hang watchdog** — if a tool call (especially a delegated sub-agent) has produced no result for N minutes (default 10, `0` = off), Intuition actively checks whether it looks stuck and, if so, sends a proper warning to the agent *and* a desktop notification to you — instead of everyone waiting politely forever.
+- **Analysis timeout** — max seconds for one background analysis (default 90, `0` = off). A wedged provider connection is cut and its watch slot refunded, so a provider outage can no longer silently burn the whole watch budget and leave the voice deaf for the rest of the request. Failed analyses are also logged (first failure, then every 10th) instead of disappearing in silence.
+- **Real Agent Zero Nudge** — optional, off by default. On top of the usual hint, Intuition can also fire a real Agent Zero Nudge — the same interrupting mechanism as the `/nudge` command — telling the agent to continue with the hint in mind. It only fires after a delivered (never suppressed) hint and at most once per 5 minutes, so it cannot turn into a loop. Great for Mentor-style setups.
 
 ## Delivery Targets
 
@@ -80,7 +82,9 @@ With `user` or `both`, every hint also raises a desktop notification (**Intuitio
 | Focus calls | `8` | Work steps watched per request, then quiet until your next message (0 = unlimited) |
 | Cooldown | `3` | Minimum iterations between hints (0 = off) |
 | Hang watchdog | `10` | Minutes a tool call may stall before Intuition checks whether it looks stuck (0 = off) |
+| Analysis timeout | `90` | Max seconds per background analysis before it is cancelled and the watch slot refunded (0 = off) |
 | Delivery | `both` | `agent`, `user`, or `both` |
+| Real Agent Zero Nudge | `false` | Also send a real (interrupting) Agent Zero Nudge after a delivered hint (max once per 5 min) |
 | Max wait (ms) | `0` | Optional max pause before tool execution; 0 = never wait |
 | History size | `10` | Recent messages included as context (0 = entire history) |
 | Prompt | *(built-in)* | Fully customizable inner-voice system prompt |
@@ -124,7 +128,7 @@ With `user` or `both`, every hint also raises a desktop notification (**Intuitio
 
 - **Name**: `intuition`
 - **Title**: `Intuition`
-- **Version**: `0.3.0`
+- **Version**: `0.3.2`
 - **Description**: A quiet inner voice that watches the agent work and whispers best-practice hints when it sees something dumb or obviously forgotten — never blocks the flow.
 
 ## Assets
@@ -133,5 +137,5 @@ With `user` or `both`, every hint also raises a desktop notification (**Intuitio
 
 ## Credits
 
-- **Intuition** was created by **DoThat from Nexum AI - [nxm.nu](https://nxm.nu)** — with Agent Zero itself as the dev team and yes, it was built *with* Intuition: Agent Zero as the senior developer, and DoThat's Intuition 💡 quietly watching over the whole build.
+- **Intuition** was created by **DoThat from Nexum AI - [nxm.nu](https://nxm.nu)** — and yes, it was built *with* Intuition: Agent Zero as the senior developer, and DoThat's Intuition 💡 quietly watching over the whole build.
 - **Architecture inspiration**: the built-in [`_infection_check`](https://github.com/agent0ai/agent-zero/tree/main/plugins/_infection_check) plugin by the Agent Zero team. Intuition reuses its collection/analysis/gating skeleton with the opposite contract — where Infection Check protects the *user* by blocking, Intuition helps the *agent* with a quiet hint. Thank you for excellent work. We love it!
